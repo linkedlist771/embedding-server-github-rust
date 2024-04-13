@@ -1,4 +1,4 @@
-use actix_web::{get, post, web, App, middleware::Logger, HttpResponse, HttpServer, Responder};
+use actix_web::{get, post, web,  body::BoxBody,http::header::ContentType, App, middleware::Logger, HttpRequest, HttpResponse, HttpServer, Responder};
 use std::env;
 use clap::{App as ClapApp, Arg};
 use serde::{Deserialize, Serialize};
@@ -40,6 +40,25 @@ struct EmbeddingResponse {
     usage: Usage,
 }
 
+#[derive(Serialize)]
+struct MyObj {
+    name: &'static str,
+}
+
+// Responder
+impl Responder for MyObj {
+    type Body = BoxBody;
+
+    fn respond_to(self, _req: &HttpRequest) -> HttpResponse<Self::Body> {
+        let body = serde_json::to_string(&self).unwrap();
+
+        // Create response and set content type
+        HttpResponse::Ok()
+            .content_type(ContentType::json())
+            .body(body)
+    }
+}
+
 
 #[get("/")]
 async fn hello() -> impl Responder {
@@ -56,14 +75,25 @@ async fn echo(req_body: String) -> impl Responder {
 
 #[get("/get_model_types")]
 async fn get_model_types() -> impl Responder {
-    // let response = BaseResponse {
-    //     object: "list",
-    // };
-    let response = json!({
-        "model_types": ["cl100k_base", "cl100k_large", "cl100k_xlarge"]
-    
+    let dummy_model_types = json!({
+        "model_types": [
+            {
+                "model": "cl100k_base",
+                "description": "CL-100k base model"
+            },
+            {
+                "model": "cl100k_large",
+                "description": "CL-100k large model"
+            },
+            {
+                "model": "cl100k_xlarge",
+                "description": "CL-100k xlarge model"
+            }
+        ]
     });
-    HttpResponse::Ok().json(response)
+
+    HttpResponse::Ok().json(dummy_model_types)
+
 }
 
 
@@ -120,6 +150,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(logger)
             .service(hello)
             .service(echo)
+            .service(get_model_types)
             .route("/hey", web::get().to(manual_hello))
     })
     .bind((host, port))?
