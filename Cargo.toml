@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
+# export TORCH_CUDA_VERSION="cu118" (this is important)
 [dependencies]
 actix-web = "4"
 env_logger = "0.9"
@@ -13,6 +13,12 @@ clap = "3.1.6"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 futures = "0.3"
+anyhow = "1.0.70"
+rust-bert = "0.22.0"  
+tch = {version="0.14.0", features=["download-libtorch"]}
+lazy_static = "1.4.0"
+
+
 
 [build]
 jobs = 8  # 使用 8 个核心进行编译

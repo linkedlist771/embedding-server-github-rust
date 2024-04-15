@@ -6,6 +6,14 @@ use clap::{App as ClapApp, Arg};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::env;
+use std::collections::HashMap;
+use std::sync::Arc;
+mod utils; 
+use utils::{get_model_infos, get_prompt_tokens, load_models, ModelInfo};
+use rust_bert::pipelines::sentence_embeddings::{
+    SentenceEmbeddingsModel
+};
+
 
 #[derive(Deserialize, Serialize, Debug)]
 struct EmbeddingRequest {
@@ -34,44 +42,60 @@ struct EmbeddingResponse {
     usage: Usage,
 }
 
-#[get("/get_model_types")]
-async fn get_model_types() -> impl Responder {
-    let dummy_model_types = json!([
-        {
-            "label": "text2vec-base-chinese",
-            "value": 1
-        }
-        ]
-    );
+struct AppState {
+    models: Arc<HashMap<String, SentenceEmbeddingsModel>>,
+    model_infos: Arc<Vec<ModelInfo>>,
+}
 
-    HttpResponse::Ok().json(dummy_model_types)
+#[get("/get_model_types")]
+async fn get_model_types(data: web::Data<AppState>) -> impl Responder {
+
+    HttpResponse::Ok().json(&*data.model_infos)
 }
 
 #[post("/embeddings")]
-async fn embeddings(embedding_request: web::Json<EmbeddingRequest>) -> impl Responder {
-    let model_name = embedding_request.model.clone().unwrap();
+async fn embeddings(
+    data: web::Data<AppState>,
+    embedding_request: web::Json<EmbeddingRequest>,
+) -> Result<HttpResponse, actix_web::Error> {  // Notice the Result type here
     let input = embedding_request.input.clone();
+    let model_name = match embedding_request.model.as_ref() {
+        Some(name) => name,
+        None => return Ok(HttpResponse::BadRequest().body("Model name is required.")),
+    };
+    let model = match data.models.get(model_name) {
+        Some(m) => m,
+        None => return Ok(HttpResponse::NotFound().body(format!("Model '{}' not found.", model_name))),
+    };
+
     let mut dummy_embeddings = Vec::<Embedding>::new();
     for (i, text) in input.iter().enumerate() {
+        let text_embedding = model.encode(&[text]).map_err(actix_web::error::ErrorInternalServerError)?;
         let embedding = Embedding {
             object: "embedding".to_string(),
             index: i as i32,
-            embedding: vec![0.1, 0.2, 0.3],
+            //error[E0507]: cannot move out of index of `Vec<Vec<f32>>`, get the first element of the Vec
+            embedding: text_embedding[0].clone(),
         };
         dummy_embeddings.push(embedding);
     }
+    let (prompt_tokens, total_tokens) = get_prompt_tokens(input);
+
     let usage = Usage {
-        prompt_tokens: 0,
-        total_tokens: 0,
+        prompt_tokens,
+        total_tokens,
     };
+
     let embedding_response = EmbeddingResponse {
         object: "list".to_string(),
         data: dummy_embeddings,
-        model: model_name,
+        model: model_name.to_string(),
         usage: usage,
     };
-    HttpResponse::Ok().json(embedding_response)
+
+    Ok(HttpResponse::Ok().json(embedding_response))
 }
+
 
 // auto reloading :  cargo watch -x run --host 0.0.0.0 --port 8848
 
@@ -79,7 +103,7 @@ async fn embeddings(embedding_request: web::Json<EmbeddingRequest>) -> impl Resp
 async fn main() -> std::io::Result<()> {
     env::set_var("RUST_LOG", "info");
     env::set_var("RUST_BACKTRACE", "1");
-    env_logger::init(); // 初始化日志记录器
+    env_logger::init();
     let matches = ClapApp::new("MyApp")
         .arg(
             Arg::with_name("host")
@@ -113,6 +137,14 @@ async fn main() -> std::io::Result<()> {
     // let use_gpu = matches.is_present("use_gpu");
     // let tokenizer_model = matches.value_of("tokenizer_model").unwrap();
 
+    let models_dir_path = "/mnt/c/Users/23174/Desktop/GitHub Project/algo-rust-bert-demo/resources";
+    let model_infos = get_model_infos(models_dir_path);
+    // hash map
+    let mut models = load_models(model_infos, models_dir_path);
+    let app_state = AppState {
+        models: Arc::new(models),
+        model_infos: Arc::new(model_infos),
+    };
     log::info!("Starting server at {}:{}", host, port);
     // info!("Models directory: {}", models_dir_path);
     // info!("Using GPU: {}", use_gpu);
@@ -120,11 +152,14 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(|| {
         let logger = Logger::default();
-        App::new().wrap(logger).service(
-            web::scope("/v1")
-                .service(get_model_types)
-                .service(embeddings),
-        )
+        App::new()
+            .wrap(logger)
+            .app_data(web::Data::new(&app_state)) // Arc allows us to safely share state with handlers
+            .service(
+                web::scope("/v1")
+                    .service(get_model_types)
+                    .service(embeddings),
+            )
         // .route("/hey", web::get().to(manual_hello))
     })
     .bind((host, port))?
